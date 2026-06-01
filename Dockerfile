@@ -1,19 +1,20 @@
 # ── Stage 1: Builder ──────────────────────────────────────────────────────────
-# Install dependencies in a separate stage to keep the final image clean
+# Update npm to latest version to patch its bundled vulnerable dependencies:
+# tar (Symlink Attack, Directory Traversal), pacote (DoS), minimatch (ReDoS),
+# glob (Command Injection), cross-spawn (ReDoS), brace-expansion (Infinite loop)
 FROM node:20-alpine AS builder
 
-# Update npm to latest to patch vulnerabilities in npm's own dependencies
-# (tar, pacote, minimatch, glob, brace-expansion, cross-spawn)
-RUN npm install -g npm@latest
+RUN npm install -g npm@latest && npm cache clean --force
 
 WORKDIR /usr/src/app
 
-# Copy lockfile and manifest, then install only production dependencies
 COPY --chown=node:node package*.json ./
-RUN npm ci --only=production
+
+# Install production dependencies (creates node_modules if any deps exist)
+RUN npm ci --only=production && mkdir -p node_modules
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
-# Use a fresh minimal image — does NOT include npm or its vulnerable deps
+# Clean minimal image — copies only app + node_modules, leaves out npm tooling
 FROM node:20-alpine
 
 # Run as non-root user
@@ -21,12 +22,12 @@ USER node
 
 WORKDIR /usr/src/app
 
-# Copy only the app code and production node_modules from builder stage
+# Copy production dependencies and app code from builder stage
 COPY --chown=node:node --from=builder /usr/src/app/node_modules ./node_modules
-COPY --chown=node:node . .
+COPY --chown=node:node server.js .
 
 # Expose app port
 EXPOSE 3000
 
-# Start the app directly with node (not npm)
+# Start directly with node (not npm) for better signal handling
 CMD ["node", "server.js"]
